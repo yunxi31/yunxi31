@@ -13,9 +13,12 @@ import com.itheima.reggie.service.DishService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -28,6 +31,8 @@ public class DishController {
 private DishFlavorService dishFlavorService;
 @Autowired
 private CategoryService categoryService;
+@Autowired
+private  RedisTemplate redisTemplate;
 @PostMapping
 public R<String> save(@RequestBody DishDto dishDto){
     log.info(dishDto.toString());
@@ -101,6 +106,16 @@ public R<Page> page(int page, int pageSize,String name){
     public R<String> update(@RequestBody DishDto dishDto){    //@RequestBody主要用来接收前端传递给后端的json字符串中的数据的(请求体中的数据的)；
         log.info(dishDto.toString());
         dishService.updateWithFlavor(dishDto);
+//
+//        //清理所有菜品的缓存数据
+//        Set keys=redisTemplate.keys("dish_*");
+//        redisTemplate.delete(keys);
+
+        //清理某个分类下的菜品缓存数据
+        String key="dish_"+dishDto.getCategoryId()+"_1";
+        redisTemplate.delete(key);
+
+
         return R.success("修改菜品成功");
     }
 /*
@@ -125,6 +140,25 @@ public R<Page> page(int page, int pageSize,String name){
 
     @GetMapping ("/list")       //这个需要扩展一下，DishDto扩展自Dish
     public R<List<DishDto>> list(Dish dish){  //查询的信息很多，因此返回一个list集合；同时传一个long型够用，但传Dish类型更合适,通用性更强
+      List<DishDto>dishDtoList=null;
+       //动态构造key
+        String key="dish_"+dish.getCategoryId()+"_"+dish.getStatus();
+
+       //先从redis中缓存数据
+        dishDtoList= (List<DishDto>) redisTemplate.opsForValue().get(key);
+
+        if (dishDtoList !=null){
+            //如果存在，直接返回，无需查询数据库
+            return R.success(dishDtoList);
+        }
+
+
+
+
+
+
+
+
         //构造查询条件
         LambdaQueryWrapper<Dish> queryWrapper=new LambdaQueryWrapper<>();
         queryWrapper.eq(dish.getCategoryId()!=null,Dish::getCategoryId,dish.getCategoryId());
@@ -137,7 +171,7 @@ public R<Page> page(int page, int pageSize,String name){
 
 
 
-        List<DishDto> dishDtoList=list.stream().map((item)->{
+    dishDtoList=list.stream().map((item)->{
             DishDto dishDto=new DishDto();
             BeanUtils.copyProperties(item,dishDto);
             Long categoryId= item.getCategoryId();//分类id
@@ -162,7 +196,8 @@ public R<Page> page(int page, int pageSize,String name){
             return dishDto;
 
         }).collect(Collectors.toList());
-
+            //如果不存在,直接查询数据库，将查询到的菜品数据缓存到redis
+        redisTemplate.opsForValue().set(key,dishDtoList,60, TimeUnit.MINUTES);
 
         return R.success(dishDtoList);
     }
